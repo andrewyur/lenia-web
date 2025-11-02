@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Hello World</title>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <link data-trunk rel="rust" data-initializer="src/initializer.js"/>
+    <div id="gui">
+        <button id="play-pause">Play/Pause</button>
+    </div>
+    <style>
+        canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;  
+        }
+
+        body {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            margin: 0;
+            padding: 0;
+        }
+
+        #gui {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+        }
+    </style>
+</body>
+</html>
