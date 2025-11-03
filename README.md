@@ -5,4 +5,5 @@ on firefox
 
 ## Todo
 
-- implement random shader or otherwise speed up randomness
+- cleanup code
+- select color palette

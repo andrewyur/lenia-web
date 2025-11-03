@@ -1,4 +1,5 @@
 mod compute;
+mod random;
 mod render;
 mod state;
 
@@ -25,14 +26,12 @@ impl App {
     }
 
     #[wasm_bindgen]
-    pub fn render_frame(&mut self, step: bool) -> Result<(), JsValue> {
+    pub fn render_frame(&mut self, step: bool) {
         self.state.update();
         if step {
-            self.state.step().map_err(|e| JsValue::from_str(&format!("{:?}", e)))?;
+            self.state.step()
         }
-        self.state
-            .render()
-            .map_err(|e| JsValue::from_str(&format!("{:?}", e)))
+        self.state.render();
     }
 
     #[wasm_bindgen]

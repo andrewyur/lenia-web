@@ -29,6 +29,7 @@ export default function myInitializer () {
       resizeObserver.observe(canvas)
 
       animate()
+      app.render_frame(playing)
     },
   }
 };

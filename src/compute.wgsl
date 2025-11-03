@@ -1,13 +1,16 @@
-struct Parameters { 
+struct Globals { 
     height: u32,
     width: u32,
-    t: u32,
-    r: u32
 }
 
-@group(0) @binding(0) var<uniform> parameters: Parameters;
-@group(0) @binding(1) var<storage, read> input: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+struct ComputeUniforms {
+    time_step: u32,
+}
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+@group(0) @binding(1) var<uniform> uniforms: ComputeUniforms;
+@group(0) @binding(2) var<storage, read> input: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
 
 var<workgroup> tile: array<f32, 676>; // radius 5: (5 + 16 + 5)(5 + 16 + 5)
 
@@ -39,18 +42,18 @@ fn cs(
                 let global_x = workgroup_origin_x + i32(tile_x) - i32(RADIUS);
                 let global_y = workgroup_origin_y + i32(tile_y) - i32(RADIUS);
 
-                let wrapped_x = (global_x + i32(parameters.width)) % i32(parameters.width);
-                let wrapped_y = (global_y + i32(parameters.height)) % i32(parameters.height);
+                let wrapped_x = (global_x + i32(globals.width)) % i32(globals.width);
+                let wrapped_y = (global_y + i32(globals.height)) % i32(globals.height);
                 
                 tile[tile_y * TILESIZE + tile_x] = 
-                    input[u32(wrapped_y) * parameters.width + u32(wrapped_x)];
+                    input[u32(wrapped_y) * globals.width + u32(wrapped_x)];
             }
         }
     }
     
     workgroupBarrier();
     
-    if(gx >= i32(parameters.width) || gy >= i32(parameters.height)) {
+    if(gx >= i32(globals.width) || gy >= i32(globals.height)) {
         return;
     }
 
@@ -67,5 +70,5 @@ fn cs(
 
     let orig = tile[(u32(ly) + RADIUS) * TILESIZE + (u32(lx) + RADIUS)];
     let growth = f32( sum>=0.12 && sum<=0.15 ) - f32( sum<0.12 || sum>0.15 );
-    output[u32(gy) * parameters.width + u32(gx)] = clamp(orig + (1.0/f32(parameters.t)) * growth, 0.0, 1.0);
+    output[u32(gy) * globals.width + u32(gx)] = clamp(orig + (1.0/f32(uniforms.time_step)) * growth, 0.0, 1.0);
 }
