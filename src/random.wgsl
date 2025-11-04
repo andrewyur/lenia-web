@@ -6,6 +6,10 @@ struct Globals {
 struct RandomnessUniforms {
     seed: u32,
     density: f32,
+    use_brush: u32,
+    size: u32,
+    x: u32,
+    y: u32,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -34,8 +38,15 @@ fn randomize(
     if (x >= globals.width || y >= globals.height) {
         return;
     }
-    
+
+    if (uniforms.use_brush == 1 && !(
+        i32(uniforms.x) - i32(uniforms.size) <= i32(x) &&  uniforms.x + uniforms.size >= x &&
+        i32(uniforms.y) - i32(uniforms.size) <= i32(y) &&  uniforms.y + uniforms.size >= y
+    )) {
+        return;
+    }
+
     let index = y * globals.width + x;
     let combined = x + y * globals.width + uniforms.seed * globals.width * globals.height;
-    output[index] = f32(wang_hash(combined)) / 4294967296.0;
+    output[index] = (f32(wang_hash(combined)) / 4294967296.0) * uniforms.density;
 }

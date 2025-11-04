@@ -3,20 +3,31 @@ use wgpu::util::DeviceExt;
 pub struct RandomState {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group: wgpu::BindGroup,
+    bind_group_a: wgpu::BindGroup,
+    bind_group_b: wgpu::BindGroup,
     uniforms_buffer: wgpu::Buffer,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Default)]
 pub struct RandomUniforms {
     pub seed: u32,
     pub density: f32,
-    pub _padding: [u32; 2]
+    pub use_brush: u32,
+    pub size: u32,
+    pub x: u32,
+    pub y: u32,
+    pub _padding: [u32; 2],
 }
 
 impl RandomState {
-    pub fn new(device: &wgpu::Device, buffer_a: &wgpu::Buffer, globals: &wgpu::Buffer, uniforms: RandomUniforms) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        buffer_a: &wgpu::Buffer,
+        buffer_b: &wgpu::Buffer,
+        globals: &wgpu::Buffer,
+        uniforms: RandomUniforms,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Randomness Bind Group Layout"),
             entries: &[
@@ -59,7 +70,7 @@ impl RandomState {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Randomness Bind Group"),
             layout: &bind_group_layout,
             entries: &[
@@ -74,6 +85,25 @@ impl RandomState {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffer_a.as_entire_binding(),
+                },
+            ],
+        });
+
+        let bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Randomness Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniforms_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_b.as_entire_binding(),
                 },
             ],
         });
@@ -98,7 +128,8 @@ impl RandomState {
         Self {
             pipeline,
             bind_group_layout,
-            bind_group,
+            bind_group_a,
+            bind_group_b,
             uniforms_buffer,
         }
     }
@@ -107,9 +138,10 @@ impl RandomState {
         &mut self,
         device: &wgpu::Device,
         buffer_a: &wgpu::Buffer,
+        buffer_b: &wgpu::Buffer,
         globals: &wgpu::Buffer,
     ) {
-        self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Randomness Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -124,30 +156,40 @@ impl RandomState {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffer_a.as_entire_binding(),
-                }
+                },
+            ],
+        });
+        self.bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Randomness Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.uniforms_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_b.as_entire_binding(),
+                },
             ],
         });
     }
 
     pub fn randomize(
-        &self, 
-        device: &wgpu::Device, 
-        queue: &wgpu::Queue, 
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
-        uniforms: Option<RandomUniforms>
+        uniforms: Option<RandomUniforms>,
+        flip: bool,
     ) {
         if let Some(uniforms) = uniforms {
-            queue.write_buffer(
-                &self.uniforms_buffer,
-                0,
-                bytemuck::cast_slice(&[uniforms]),
-            );
+            queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
         }
-
-        let mut encoder = device
-                .create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor {
-                    label: Some("Randomness Compute Encoder"),
-                });
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -156,13 +198,17 @@ impl RandomState {
             });
 
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
+
+            let bind_group = if flip {
+                &self.bind_group_b
+            } else {
+                &self.bind_group_a
+            };
+            pass.set_bind_group(0, bind_group, &[]);
 
             let workgroups_x = (config.width + 15) / 16;
             let workgroups_y = (config.height + 15) / 16;
             pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
-
-        queue.submit(Some(encoder.finish()));
     }
 }

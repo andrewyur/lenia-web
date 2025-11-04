@@ -38,4 +38,9 @@ impl App {
     pub fn handle_resize(&mut self, width: u32, height: u32) {
         self.state.resize(width, height);
     }
+
+    #[wasm_bindgen]
+    pub fn randomize(&mut self, x: u32, y: u32) {
+        self.state.randomize_area(x, y);
+    }
 }

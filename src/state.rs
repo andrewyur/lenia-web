@@ -1,7 +1,12 @@
 use anyhow::anyhow;
+use web_sys::js_sys::Math;
 use wgpu::util::DeviceExt;
 
-use crate::{compute::{ComputeState, ComputeUniforms}, random::{RandomState, RandomUniforms}, render::RenderState};
+use crate::{
+    compute::{BELL_KERNEL, ComputeState, ComputeUniforms},
+    random::{RandomState, RandomUniforms},
+    render::RenderState,
+};
 
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -17,10 +22,11 @@ pub struct State {
     buffer_a: wgpu::Buffer,
     buffer_b: wgpu::Buffer,
     globals_buffer: wgpu::Buffer,
+    encoder: wgpu::CommandEncoder,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Default)]
 struct Globals {
     // Should be padded to a multiple of 16 bytes for alignment
     height: u32,
@@ -65,7 +71,7 @@ impl State {
         };
         surface.configure(&device, &config);
 
-        let buffer_size = (config.width * config.height * 4 )as u64;
+        let buffer_size = (config.width * config.height * 4) as u64;
 
         let buffer_a = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("buffer A"),
@@ -88,7 +94,7 @@ impl State {
         let globals = Globals {
             width: canvas.width(),
             height: canvas.height(),
-            _padding: [0; 2],
+            ..Default::default()
         };
 
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -98,17 +104,35 @@ impl State {
         });
 
         let render = RenderState::new(&device, &buffer_a, &buffer_b, &globals_buffer, &config);
-        let compute = ComputeState::new(&device, &buffer_a, &buffer_b, &globals_buffer, ComputeUniforms {
-            time_step: 10,
-            _padding: [0; 3]
-        });
-        let random = RandomState::new(&device, &buffer_a, &globals_buffer, RandomUniforms {
-            seed: 12345,
-            density: 0.3,
-            _padding: [0; 2]
-        });
+        let compute = ComputeState::new(
+            &device,
+            &buffer_a,
+            &buffer_b,
+            &globals_buffer,
+            ComputeUniforms {
+                time_step: 50,
+                kernel_size: 19,
+                kernel_sum: BELL_KERNEL.iter().map(|r| r.iter().sum::<f32>()).sum(),
+                m: 0.135,
+                s: 0.015,
+                ..Default::default()
+            },
+        );
+        let random = RandomState::new(
+            &device,
+            &buffer_a,
+            &buffer_b,
+            &globals_buffer,
+            RandomUniforms {
+                seed: (Math::random() * 100000.) as u32,
+                density: 0.5,
+                ..Default::default()
+            },
+        );
 
-        let created = Self {
+        let encoder = device.create_command_encoder(&Default::default());
+
+        Ok(Self {
             surface,
             device,
             queue,
@@ -122,38 +146,59 @@ impl State {
             buffer_b,
             globals_buffer,
             flip: false,
-        };
-
-        created.randomize();
-
-        Ok(created)
+            encoder,
+        })
     }
 
-    pub fn randomize(&self) {
+    pub fn randomize_full(&mut self) {
         self.random.randomize(
-            &self.device, 
-            &self.queue, 
-            &self.config, 
-            None,
+            &mut self.encoder,
+            &self.queue,
+            &self.config,
+            Some(RandomUniforms {
+                seed: (Math::random() * 100000.) as u32,
+                ..Default::default()
+            }),
+            self.flip,
+        );
+    }
+
+    pub fn randomize_area(&mut self, x: u32, y: u32) {
+        log::info!("randomize called");
+        self.random.randomize(
+            &mut self.encoder,
+            &self.queue,
+            &self.config,
+            Some(RandomUniforms {
+                seed: (Math::random() * 100000.) as u32,
+                density: 0.5,
+                use_brush: 1,
+                size: 10,
+                x,
+                y,
+                ..Default::default()
+            }),
+            self.flip,
         );
     }
 
     pub fn step(&mut self) {
-        self.compute.step(
-            &self.device, 
-            &self.queue, 
-            &self.config, 
-            &mut self.flip
-        );
+        self.compute
+            .step(&mut self.encoder, &self.config, &mut self.flip);
     }
 
-    pub fn render(&self) {
-        self.render.render(
-            &self.device,
-            &self.queue,
-            &self.surface,
-            self.flip
+    pub fn render(&mut self) {
+        self.render
+            .render(&mut self.encoder, &self.surface, self.flip);
+
+        let encoder = std::mem::replace(
+            &mut self.encoder,
+            self.device.create_command_encoder(&Default::default()),
         );
+
+        self.queue.submit(Some(encoder.finish()));
+        let output = self.surface.get_current_texture().unwrap();
+        output.present();
     }
 
     pub fn update(&mut self) {}
@@ -167,15 +212,15 @@ impl State {
             return;
         }
 
-        let buffer_size = ((width * height * 4 + 3) & !3) as u64;
+        let buffer_size = (width * height * 4) as u64;
 
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
 
         self.globals = Globals {
-            height: height,
-            width: width,
+            height,
+            width,
             ..self.globals
         };
 
@@ -187,15 +232,15 @@ impl State {
 
         self.buffer_a = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("buffer A"),
-            size: buffer_size ,
+            size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false
+            mapped_at_creation: false,
         });
 
-        self.random.recreate_bind_groups(&self.device, &self.buffer_a, &self.globals_buffer);
-        self.randomize();
+        // self.random.recreate_bind_groups(&self.device, &self.buffer_a, &self.buffer_b, &self.globals_buffer);
+        // self.randomize_full();
 
         self.buffer_b = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("buffer B"),
@@ -206,6 +251,13 @@ impl State {
             mapped_at_creation: false,
         });
         self.flip = false;
+
+        self.random.recreate_bind_groups(
+            &self.device,
+            &self.buffer_a,
+            &self.buffer_b,
+            &self.globals_buffer,
+        );
 
         self.render.recreate_bind_groups(
             &self.device,
@@ -220,6 +272,6 @@ impl State {
             &self.globals_buffer,
         );
 
-        _ = self.render()
+        self.render()
     }
 }

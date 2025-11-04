@@ -151,7 +151,7 @@ impl RenderState {
         buffer_b: &wgpu::Buffer,
         globals: &wgpu::Buffer,
     ) {
-       self.bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Render Bind Group A"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -190,20 +190,9 @@ impl RenderState {
         });
     }
 
-    pub fn render(
-        &self, 
-        device: &wgpu::Device, 
-        queue: &wgpu::Queue, 
-        surface: &wgpu::Surface,
-        flip: bool,
-    ) {
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, surface: &wgpu::Surface, flip: bool) {
         let output = surface.get_current_texture().unwrap();
         let view = output.texture.create_view(&Default::default());
-
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -237,12 +226,8 @@ impl RenderState {
 
             pass.draw(0..4, 0..1);
         }
-        queue.submit(Some(encoder.finish()));
-        output.present();
     }
 }
-
-
 
 const VIRIDIS: [[f32; 4]; 256] = [
     [0.267004, 0.004874, 0.329415, 0.0],
