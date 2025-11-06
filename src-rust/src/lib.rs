@@ -7,6 +7,13 @@ use state::State;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+pub fn test() {
+    console_error_panic_hook::set_once();
+    console_log::init_with_level(log::Level::Debug).unwrap();
+    log::info!("hi");
+}
+
+#[wasm_bindgen]
 pub struct App {
     state: State,
 }
