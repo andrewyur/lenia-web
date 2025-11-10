@@ -1,3 +1,4 @@
+use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
 pub struct ComputeState {
@@ -5,19 +6,48 @@ pub struct ComputeState {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group_a: wgpu::BindGroup, // input=buffer_a, output=buffer_b
     bind_group_b: wgpu::BindGroup, // input=buffer_b, output=buffer_a
-    uniforms_buffer: wgpu::Buffer,
+    pub uniforms_buffer: wgpu::Buffer,
     kernel_buffer: wgpu::Buffer,
+    kernel_metadata_buffer: wgpu::Buffer,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Default)]
+#[derive(Copy, Clone, Debug, encase::ShaderType, serde::Deserialize, serde::Serialize)]
 pub struct ComputeUniforms {
     pub time_step: u32,
-    pub kernel_size: u32,
-    pub kernel_sum: f32,
     pub m: f32,
     pub s: f32,
-    pub _padding: [u32; 3],
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const COMPUTE_CONFIG: &'static str = r#"
+    type ComputeConfig = {
+        time_step: number,
+        m: number,
+        s: number,
+    }
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "ComputeConfig")]
+    #[derive(Debug)]
+    pub type ComputeConfig;
+}
+
+impl Default for ComputeUniforms {
+    fn default() -> Self {
+        Self {
+            time_step: 50,
+            m: 0.135,
+            s: 0.015,
+        }
+    }
+}
+
+#[derive(encase::ShaderType, Debug)]
+pub struct KernelMetadata {
+    pub size: u32,
+    pub sum: f32,
 }
 
 impl ComputeState {
@@ -26,7 +56,6 @@ impl ComputeState {
         buffer_a: &wgpu::Buffer,
         buffer_b: &wgpu::Buffer,
         globals: &wgpu::Buffer,
-        uniforms: ComputeUniforms,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("compute.wgsl"));
 
@@ -77,9 +106,20 @@ impl ComputeState {
                     },
                     count: None,
                 },
-                // kernel
+                // kernel data
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // kernel
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -91,15 +131,32 @@ impl ComputeState {
             ],
         });
 
+        let kernel_metadata = KernelMetadata {
+            size: BELL_KERNEL.len() as u32,
+            sum: BELL_KERNEL.iter().map(|r| r.iter().sum::<f32>()).sum(),
+        };
+
+        let mut kernel_metadata_aligned = encase::UniformBuffer::new(Vec::<u8>::new());
+        kernel_metadata_aligned.write(&kernel_metadata).unwrap();
+
+        let kernel_metadata_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Kernel Data Buffer"),
+            contents: &kernel_metadata_aligned.into_inner(),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         let kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Kernel Buffer"),
             contents: bytemuck::cast_slice(BELL_KERNEL.as_flattened()),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
+        let mut uniforms_data = encase::UniformBuffer::new(Vec::<u8>::new());
+        uniforms_data.write(&ComputeUniforms::default()).unwrap();
+
         let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Compute Uniforms Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
+            contents: &uniforms_data.into_inner(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -125,6 +182,10 @@ impl ComputeState {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: kernel_metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: kernel_buffer.as_entire_binding(),
                 },
             ],
@@ -152,6 +213,10 @@ impl ComputeState {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: kernel_metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: kernel_buffer.as_entire_binding(),
                 },
             ],
@@ -179,6 +244,7 @@ impl ComputeState {
             bind_group_layout,
             uniforms_buffer,
             kernel_buffer,
+            kernel_metadata_buffer,
         }
     }
 
@@ -211,6 +277,10 @@ impl ComputeState {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: self.kernel_metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: self.kernel_buffer.as_entire_binding(),
                 },
             ],
@@ -238,6 +308,10 @@ impl ComputeState {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: self.kernel_metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: self.kernel_buffer.as_entire_binding(),
                 },
             ],

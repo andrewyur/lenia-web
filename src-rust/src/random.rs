@@ -1,3 +1,4 @@
+use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
 pub struct RandomState {
@@ -5,20 +6,50 @@ pub struct RandomState {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group_a: wgpu::BindGroup,
     bind_group_b: wgpu::BindGroup,
-    uniforms_buffer: wgpu::Buffer,
+    pub uniforms_buffer: wgpu::Buffer,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Default)]
+#[derive(Copy, Clone, Debug, encase::ShaderType, serde::Deserialize, serde::Serialize)]
 pub struct RandomUniforms {
+    pub x: u32,
+    pub y: u32,
     pub seed: u32,
     pub density: f32,
     pub use_brush: u32,
     pub size: u32,
-    pub x: u32,
-    pub y: u32,
-    pub _padding: [u32; 2],
 }
+impl Default for RandomUniforms {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            seed: (web_sys::js_sys::Math::random() * 100000.) as u32,
+            density: 0.5,
+            use_brush: 1,
+            size: 10
+        }
+    }
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const RANDOM_CONFIG: &'static str = r#"
+    type RandomConfig = {
+        x: number,
+        y: number,
+        seed: number,
+        density: number,
+        use_brush: number,
+        size: number,
+    }
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "RandomConfig")]
+    #[derive(Debug)]
+    pub type RandomConfig;
+}
+
 
 impl RandomState {
     pub fn new(
@@ -26,7 +57,6 @@ impl RandomState {
         buffer_a: &wgpu::Buffer,
         buffer_b: &wgpu::Buffer,
         globals: &wgpu::Buffer,
-        uniforms: RandomUniforms,
     ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Randomness Bind Group Layout"),
@@ -64,9 +94,12 @@ impl RandomState {
             ],
         });
 
+        let mut uniforms_aligned = encase::UniformBuffer::new(Vec::<u8>::new());
+        uniforms_aligned.write(&RandomUniforms::default()).unwrap();
+
         let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Random Uniforms Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
+            contents: &uniforms_aligned.into_inner(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -182,33 +215,30 @@ impl RandomState {
     pub fn randomize(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
-        uniforms: Option<RandomUniforms>,
+        queue: &wgpu::Queue,
+        x: u32,
+        y: u32,
         flip: bool,
     ) {
-        if let Some(uniforms) = uniforms {
-            queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-        }
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[x, y]));
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Randomness Compute Pass"),
-                timestamp_writes: None,
-            });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Randomness Compute Pass"),
+            timestamp_writes: None,
+        });
 
-            pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.pipeline);
 
-            let bind_group = if flip {
-                &self.bind_group_b
-            } else {
-                &self.bind_group_a
-            };
-            pass.set_bind_group(0, bind_group, &[]);
+        let bind_group = if flip {
+            &self.bind_group_b
+        } else {
+            &self.bind_group_a
+        };
+        pass.set_bind_group(0, bind_group, &[]);
 
-            let workgroups_x = (config.width + 15) / 16;
-            let workgroups_y = (config.height + 15) / 16;
-            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
+        let workgroups_x = (config.width + 15) / 16;
+        let workgroups_y = (config.height + 15) / 16;
+        pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 }

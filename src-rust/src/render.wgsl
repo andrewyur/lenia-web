@@ -4,7 +4,7 @@ struct Globals {
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var<uniform> colors: array<vec3<f32>, 256>;
+@group(0) @binding(1) var<storage, read> colors: array<vec3<f32>>;
 @group(0) @binding(2) var<storage, read> grid: array<f32>;
 
 @vertex fn vs(

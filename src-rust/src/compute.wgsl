@@ -5,17 +5,21 @@ struct Globals {
 
 struct ComputeUniforms {
     time_step: u32,
-    kernel_size: u32,
-    kernel_sum: f32,
     m: f32,
     s: f32,
+}
+
+struct KernelMetadata {
+    size: u32,
+    sum: f32,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<uniform> uniforms: ComputeUniforms;
 @group(0) @binding(2) var<storage, read> input: array<f32>;
 @group(0) @binding(3) var<storage, read_write> output: array<f32>;
-@group(0) @binding(4) var<storage> kernel: array<f32>;
+@group(0) @binding(4) var<uniform> kernel_metadata: KernelMetadata;
+@group(0) @binding(5) var<storage, read> kernel: array<f32>;
 
 var<workgroup> tile: array<f32, 6400>; // max radius 32 with workgroup size 16
 
@@ -33,7 +37,7 @@ fn cs(
     let workgroup_origin_x = gx - lx;
     let workgroup_origin_y = gy - ly;
 
-    let radius = u32(uniforms.kernel_size / 2);
+    let radius = u32(kernel_metadata.size / 2);
     let tile_size = 16 + 2 * radius;
 
 
@@ -63,17 +67,17 @@ fn cs(
     }
 
     var sum = 0.0;
-    for (var dy = 0u; dy < uniforms.kernel_size; dy++) {
-        for (var dx = 0u; dx < uniforms.kernel_size; dx++) {
+    for (var dy = 0u; dy < kernel_metadata.size; dy++) {
+        for (var dx = 0u; dx < kernel_metadata.size; dx++) {
             if (dx == radius && dy == radius) {
                 continue;
             }
             let tile_idx = (u32(ly) + dy) * tile_size + (u32(lx) + dx);
-            sum += tile[tile_idx] * kernel[u32(dy) * uniforms.kernel_size + u32(dx)];
+            sum += tile[tile_idx] * kernel[u32(dy) * kernel_metadata.size + u32(dx)];
         }
     }
 
-    sum /= uniforms.kernel_sum;
+    sum /= kernel_metadata.sum;
 
     let orig = tile[(u32(ly) + radius) * tile_size + (u32(lx) + radius)];
 

@@ -1,16 +1,14 @@
 use anyhow::anyhow;
-use web_sys::js_sys::Math;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    compute::{BELL_KERNEL, ComputeState, ComputeUniforms},
+    compute::{ComputeState, ComputeUniforms},
     random::{RandomState, RandomUniforms},
     render::RenderState,
 };
 
 pub struct State {
     surface: wgpu::Surface<'static>,
-    canvas: web_sys::HtmlCanvasElement,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -25,13 +23,10 @@ pub struct State {
     encoder: wgpu::CommandEncoder,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Default)]
+#[derive(Copy, Clone, Debug, encase::ShaderType)]
 struct Globals {
-    // Should be padded to a multiple of 16 bytes for alignment
     height: u32,
     width: u32,
-    _padding: [u32; 2],
 }
 
 impl State {
@@ -94,12 +89,14 @@ impl State {
         let globals = Globals {
             width: canvas.width(),
             height: canvas.height(),
-            ..Default::default()
         };
 
+        let mut globals_data = encase::UniformBuffer::new(Vec::<u8>::new());
+        globals_data.write(&globals).unwrap();
+        
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Parameters"),
-            contents: bytemuck::cast_slice(&[globals]),
+            label: Some("Globals"),
+            contents: &globals_data.into_inner(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -108,26 +105,13 @@ impl State {
             &device,
             &buffer_a,
             &buffer_b,
-            &globals_buffer,
-            ComputeUniforms {
-                time_step: 50,
-                kernel_size: 19,
-                kernel_sum: BELL_KERNEL.iter().map(|r| r.iter().sum::<f32>()).sum(),
-                m: 0.135,
-                s: 0.015,
-                ..Default::default()
-            },
+            &globals_buffer
         );
         let random = RandomState::new(
             &device,
             &buffer_a,
             &buffer_b,
-            &globals_buffer,
-            RandomUniforms {
-                seed: (Math::random() * 100000.) as u32,
-                density: 0.5,
-                ..Default::default()
-            },
+            &globals_buffer
         );
 
         let encoder = device.create_command_encoder(&Default::default());
@@ -137,7 +121,6 @@ impl State {
             device,
             queue,
             config,
-            canvas,
             render,
             compute,
             random,
@@ -150,34 +133,47 @@ impl State {
         })
     }
 
-    pub fn randomize_full(&mut self) {
-        self.random.randomize(
-            &mut self.encoder,
-            &self.queue,
-            &self.config,
-            Some(RandomUniforms {
-                seed: (Math::random() * 100000.) as u32,
-                ..Default::default()
-            }),
-            self.flip,
-        );
+    // pub fn randomize_full(&mut self) {
+    //     self.random.randomize(
+    //         &mut self.encoder,
+    //         &self.queue,
+    //         &self.config,
+    //         Some(RandomUniforms {
+    //             seed: (Math::random() * 100000.) as u32,
+    //             ..Default::default()
+    //         }),
+    //         self.flip,
+    //     );
+    // }
+
+    pub fn clear(&mut self) {
+        let buffer = if self.flip {
+            &self.buffer_b
+        } else {
+            &self.buffer_a
+        };
+
+        self.encoder.clear_buffer(buffer, 0, None);
+    }
+
+    pub fn write_random_uniforms(&self, uniforms: RandomUniforms) {
+        let mut uniforms_data = encase::UniformBuffer::new(Vec::<u8>::new());
+        uniforms_data.write(&uniforms).unwrap();
+        self.queue.write_buffer(&self.random.uniforms_buffer, 0, &uniforms_data.into_inner());
+    }
+    pub fn write_compute_uniforms(&self, uniforms: ComputeUniforms) {
+        let mut uniforms_data = encase::UniformBuffer::new(Vec::<u8>::new());
+        uniforms_data.write(&uniforms).unwrap();
+        self.queue.write_buffer(&self.compute.uniforms_buffer, 0, &uniforms_data.into_inner());
     }
 
     pub fn randomize_area(&mut self, x: u32, y: u32) {
-        log::info!("randomize called");
         self.random.randomize(
             &mut self.encoder,
-            &self.queue,
             &self.config,
-            Some(RandomUniforms {
-                seed: (Math::random() * 100000.) as u32,
-                density: 0.5,
-                use_brush: 1,
-                size: 10,
-                x,
-                y,
-                ..Default::default()
-            }),
+            &self.queue,
+            x, 
+            y,
             self.flip,
         );
     }
@@ -224,11 +220,7 @@ impl State {
             ..self.globals
         };
 
-        self.queue.write_buffer(
-            &self.globals_buffer,
-            0,
-            bytemuck::cast_slice(&[self.globals]),
-        );
+        self.queue.write_buffer( &self.globals_buffer, 0, bytemuck::cast_slice(&[height, width]) );
 
         self.buffer_a = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("buffer A"),

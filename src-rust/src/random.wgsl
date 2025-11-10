@@ -4,12 +4,12 @@ struct Globals {
 }
 
 struct RandomnessUniforms {
+    x: u32,
+    y: u32,
     seed: u32,
     density: f32,
     use_brush: u32,
     size: u32,
-    x: u32,
-    y: u32,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
