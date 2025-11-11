@@ -5,8 +5,9 @@ on firefox
 
 ## Todo
 
-- switch between types of kernels, tweak parameters
-- kernel graph
-- randomze parameters button
+- switch between types of kernels, tweak kernel parameters
+- kernel cross section graph, growth graph
+- parameter descriptions
 - about section
 - multi channel lenia
+- webgpu detection

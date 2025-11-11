@@ -1,5 +1,9 @@
 <script lang="ts" module>
-  export const [getAppContext, setAppContext] = createContext<{ app: App | null }>();
+  type AppContext = {
+    app: App | null
+    canvas: HTMLCanvasElement | null
+  };
+  export const [getAppContext, setAppContext] = createContext<AppContext>();
 </script>
 <script lang="ts">
   import { onMount } from "svelte";
@@ -8,9 +12,16 @@
   import { createContext } from 'svelte';
 
   let canvas: HTMLCanvasElement;
-  const context = $state({ app: null as App | null })
+  const context: AppContext = $state({ 
+    app: null,
+    canvas: null,
+  })
+
   setAppContext(context)
   let playing = $state(true)
+  let scale = $state(3)
+  let fps = $state(0);
+  const times: DOMHighResTimeStamp[] = [];
 
   let clickEvent: null | MouseEvent = $state(null);
   let resizeTimeout: null | number = $state(null);
@@ -47,8 +58,8 @@
     if (resizeTimeout) clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
       context.app?.handle_resize(
-        entry.contentRect.width / 3,
-        entry.contentRect.height / 3,
+        entry.contentRect.width / scale,
+        entry.contentRect.height / scale,
       );
     }, 50);
   });
@@ -56,9 +67,17 @@
   onMount(async () => {
     await init();
 
+    context.canvas = canvas
     context.app = await App.new(canvas)
 
     const animate = () => {
+      const now = performance.now();
+      while (times.length > 0 && times[0] <= now - 1000) {
+        times.shift();
+      }
+      times.push(now);
+      fps = times.length; 
+
       context.app?.render_frame(playing);
       requestAnimationFrame(animate);
     };
@@ -78,5 +97,5 @@
     style="image-rendering: pixelated;"
   ></canvas>
 
-  <ControlPanel bind:playing />
+  <ControlPanel bind:fps bind:playing bind:scale/>
 </main>
