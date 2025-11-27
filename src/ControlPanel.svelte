@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { ComputeConfig, RandomConfig } from "lenia-web";
+    import type { Parameters } from "lenia-web";
     import Parameter from "./lib/Parameter.svelte";
     import { getAppContext } from "./App.svelte";
     import ScaleTuner from "./lib/ScaleTuner.svelte";
@@ -26,26 +26,17 @@
 
     const context = getAppContext();
 
-    let randomValues: RandomConfig = $state({
-        x: 0,
-        y: 0,
-        seed: Math.round(Math.random() * 10000),
-        density: 0.5,
-        use_brush: 1,
-        size: 10,
-    });
-
-    let computeValues: ComputeConfig = $state({
-        time_step: 50,
-        m: 0.135,
-        s: 0.015,
-    });
+    let parameters: Parameters = $state({
+        random_seed: Math.round(Math.random() * 10000),
+        random_density: 0.5,
+        random_brush_size: 10,
+        compute_time_step: 50,
+        compute_m: 0.135,
+        compute_s: 0.015,
+    })
 
     $effect(() => {
-        if (randomValues) context.app?.set_random_values(randomValues);
-    });
-    $effect(() => {
-        if (computeValues) context.app?.set_compute_values(computeValues);
+        context.app?.set_parameters(parameters);
     });
 
     let visible = $state(true);
@@ -66,7 +57,7 @@
     <div class="flex flex-row gap-5">
         <SvgButton
             onclick={() => (playing = !playing)}
-            aria-label="stop/start the game"
+            aria-label="stop/start the simulation"
             path={playing
                 ? "M15.75 5.25v13.5m-7.5-13.5v13.5"
                 : "M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"}
@@ -75,6 +66,12 @@
             onclick={() => context.app?.clear()}
             aria-label="clear the canvas"
             path="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+        />
+        <SvgButton
+            onclick={() => context.app?.step()}
+            hidden={playing}
+            aria-label="step the simulation"
+            path="M10.029 4.285A2 2 0 0 0 7 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z M3 4v16"
         />
 
         <div class="grow"></div>
@@ -116,7 +113,7 @@
             name="Time Step"
             min={1}
             max={50}
-            bind:value={computeValues.time_step}
+            bind:value={parameters.compute_time_step}
             step={1}
         />
         <Parameter
@@ -124,7 +121,7 @@
             name="m"
             min={0}
             max={1}
-            bind:value={computeValues.m}
+            bind:value={parameters.compute_m}
             step={0.0001}
         />
         <Parameter
@@ -132,7 +129,7 @@
             name="s"
             min={0}
             max={1}
-            bind:value={computeValues.s}
+            bind:value={parameters.compute_s}
             step={0.0001}
         />
     </ParameterGroup>
@@ -141,15 +138,15 @@
         <Parameter
             name="Brush Size"
             min={1}
-            max={20}
-            bind:value={randomValues.size}
+            max={50}
+            bind:value={parameters.random_brush_size}
             step={1}
         />
         <Parameter
             name="Density"
             min={0}
             max={1}
-            bind:value={randomValues.density}
+            bind:value={parameters.random_density}
             step={0.01}
         />
     </ParameterGroup>

@@ -6,6 +6,7 @@ on firefox
 ## Todo
 
 - switch between types of kernels, tweak kernel parameters
+- fft kernel application
 - kernel cross section graph, growth graph
 - parameter descriptions
 - about section

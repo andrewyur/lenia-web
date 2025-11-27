@@ -1,10 +1,7 @@
 use anyhow::anyhow;
-use wgpu::util::DeviceExt;
 
 use crate::{
-    compute::{ComputeState, ComputeUniforms},
-    random::{RandomState, RandomUniforms},
-    render::RenderState,
+    Parameters, compute::{ComputeState, ComputeUniforms}, fft_compute::{FFTComputeState}, random::{RandomState, RandomUniforms}, render::{RenderState, RenderUniforms}, storage_manager::Storage, uniforms_manager::Uniforms
 };
 
 pub struct State {
@@ -14,19 +11,10 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     render: RenderState,
     compute: ComputeState,
+    fft_compute: FFTComputeState,
     random: RandomState,
-    globals: Globals,
-    flip: bool,
-    buffer_a: wgpu::Buffer,
-    buffer_b: wgpu::Buffer,
-    globals_buffer: wgpu::Buffer,
+    grid: Storage,
     encoder: wgpu::CommandEncoder,
-}
-
-#[derive(Copy, Clone, Debug, encase::ShaderType)]
-struct Globals {
-    height: u32,
-    width: u32,
 }
 
 impl State {
@@ -36,7 +24,10 @@ impl State {
             ..Default::default()
         });
 
-        let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))?;
+        let width = canvas.width();
+        let height = canvas.height();
+
+        let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptionsBase {
@@ -50,15 +41,15 @@ impl State {
 
         let surface_caps = surface.get_capabilities(&adapter);
 
-        if canvas.width() == 0 || canvas.height() == 0 {
+        if width == 0 || height == 0 {
             return Err(anyhow!("canvas height or width cannot be 0"));
         }
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
-            width: canvas.width(),
-            height: canvas.height(),
+            width,
+            height,
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
@@ -66,55 +57,27 @@ impl State {
         };
         surface.configure(&device, &config);
 
-        let buffer_size = (config.width * config.height * 4) as u64;
+        let buffer_size = (width * height * 4) as u64;
+        let grid = Storage::new_empty(&device, "Grid", buffer_size);
 
-        let buffer_a = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("buffer A"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
+        let render_uniforms = Uniforms::new(&device, "Render", RenderUniforms {
+            height, width, ..Default::default()
         });
+        let render = RenderState::new(&device, &grid, render_uniforms, &config);
 
-        let buffer_b = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("buffer B"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
+        let compute_uniforms = Uniforms::new(&device, "Compute", ComputeUniforms {
+            height, width, ..Default::default()
         });
+        let compute = ComputeState::new(&device, &grid, compute_uniforms);
 
-        let globals = Globals {
-            width: canvas.width(),
-            height: canvas.height(),
-        };
+        let mut encoder = device.create_command_encoder(&Default::default());
 
-        let mut globals_data = encase::UniformBuffer::new(Vec::<u8>::new());
-        globals_data.write(&globals).unwrap();
-        
-        let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Globals"),
-            contents: &globals_data.into_inner(),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let fft_compute= FFTComputeState::new(&device, &mut encoder, &queue, &grid, width, height);
+
+        let random_uniforms = Uniforms::new(&device, "Randomness", RandomUniforms {
+            height, width, ..Default::default()
         });
-
-        let render = RenderState::new(&device, &buffer_a, &buffer_b, &globals_buffer, &config);
-        let compute = ComputeState::new(
-            &device,
-            &buffer_a,
-            &buffer_b,
-            &globals_buffer
-        );
-        let random = RandomState::new(
-            &device,
-            &buffer_a,
-            &buffer_b,
-            &globals_buffer
-        );
-
-        let encoder = device.create_command_encoder(&Default::default());
+        let random = RandomState::new(&device, &grid, random_uniforms);
 
         Ok(Self {
             surface,
@@ -123,81 +86,57 @@ impl State {
             config,
             render,
             compute,
+            fft_compute,
             random,
-            globals,
-            buffer_a,
-            buffer_b,
-            globals_buffer,
-            flip: false,
+            grid,
             encoder,
         })
     }
 
-    // pub fn randomize_full(&mut self) {
-    //     self.random.randomize(
-    //         &mut self.encoder,
-    //         &self.queue,
-    //         &self.config,
-    //         Some(RandomUniforms {
-    //             seed: (Math::random() * 100000.) as u32,
-    //             ..Default::default()
-    //         }),
-    //         self.flip,
-    //     );
-    // }
-
     pub fn clear(&mut self) {
-        let buffer = if self.flip {
-            &self.buffer_b
-        } else {
-            &self.buffer_a
-        };
-
-        self.encoder.clear_buffer(buffer, 0, None);
+        self.encoder.clear_buffer(self.grid.buffer(), 0, None);
     }
 
-    pub fn write_random_uniforms(&self, uniforms: RandomUniforms) {
-        let mut uniforms_data = encase::UniformBuffer::new(Vec::<u8>::new());
-        uniforms_data.write(&uniforms).unwrap();
-        self.queue.write_buffer(&self.random.uniforms_buffer, 0, &uniforms_data.into_inner());
-    }
-    pub fn write_compute_uniforms(&self, uniforms: ComputeUniforms) {
-        let mut uniforms_data = encase::UniformBuffer::new(Vec::<u8>::new());
-        uniforms_data.write(&uniforms).unwrap();
-        self.queue.write_buffer(&self.compute.uniforms_buffer, 0, &uniforms_data.into_inner());
+    pub fn parse_parameters(&mut self, parameters: Parameters) {
+        self.random.uniforms.density = parameters.random_density;
+        self.random.uniforms.size = parameters.random_brush_size;
+        self.random.uniforms.seed = parameters.random_seed;
+
+        self.compute.uniforms.m = parameters.compute_m;
+        self.compute.uniforms.s = parameters.compute_s;
+        self.compute.uniforms.time_step = parameters.compute_time_step;
     }
 
     pub fn randomize_area(&mut self, x: u32, y: u32) {
-        self.random.randomize(
+        self.random.run(
             &mut self.encoder,
-            &self.config,
             &self.queue,
             x, 
             y,
-            self.flip,
         );
     }
 
     pub fn step(&mut self) {
-        self.compute
-            .step(&mut self.encoder, &self.config, &mut self.flip);
+        self.fft_compute.run(&mut self.encoder, &self.queue);
     }
 
     pub fn render(&mut self) {
-        self.render
-            .render(&mut self.encoder, &self.surface, self.flip);
+        let output = self.surface.get_current_texture().unwrap();
 
+        let view = output.texture.create_view(&Default::default());
+        
+        self.render
+            .render_into(&mut self.encoder, &view, &self.queue);
+        
         let encoder = std::mem::replace(
             &mut self.encoder,
             self.device.create_command_encoder(&Default::default()),
         );
-
+        
         self.queue.submit(Some(encoder.finish()));
-        let output = self.surface.get_current_texture().unwrap();
+
         output.present();
     }
-
-    pub fn update(&mut self) {}
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width <= 0 || height <= 0 {
@@ -208,61 +147,25 @@ impl State {
             return;
         }
 
-        let buffer_size = (width * height * 4) as u64;
-
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        
+        let buffer_size = (width * height * 4) as u64;
+        self.grid = Storage::new_empty(&self.device, "Grid", buffer_size);
 
-        self.globals = Globals {
-            height,
-            width,
-            ..self.globals
-        };
+        self.random.recreate_bind_groups(&self.device, &self.grid);
+        self.render.recreate_bind_groups(&self.device, &self.grid);
+        // self.compute.recreate_bind_groups(&self.device, &self.grid);
 
-        self.queue.write_buffer( &self.globals_buffer, 0, bytemuck::cast_slice(&[height, width]) );
+        self.random.uniforms.width = width;
+        self.random.uniforms.height = height;
+        self.render.uniforms.width = width;
+        self.render.uniforms.height = height;
+        // self.compute.uniforms.width = width;
+        // self.compute.uniforms.height = height;
 
-        self.buffer_a = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("buffer A"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-
-        // self.random.recreate_bind_groups(&self.device, &self.buffer_a, &self.buffer_b, &self.globals_buffer);
-        // self.randomize_full();
-
-        self.buffer_b = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("buffer B"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        self.flip = false;
-
-        self.random.recreate_bind_groups(
-            &self.device,
-            &self.buffer_a,
-            &self.buffer_b,
-            &self.globals_buffer,
-        );
-
-        self.render.recreate_bind_groups(
-            &self.device,
-            &self.buffer_a,
-            &self.buffer_b,
-            &self.globals_buffer,
-        );
-        self.compute.recreate_bind_groups(
-            &self.device,
-            &self.buffer_a,
-            &self.buffer_b,
-            &self.globals_buffer,
-        );
+        self.fft_compute.handle_resize(&self.device, &mut self.encoder, &self.queue, &self.grid, height, width);
 
         self.render()
     }

@@ -1,105 +1,59 @@
-use wgpu::util::DeviceExt;
+use crate::{storage_manager::Storage, uniforms_manager::Uniforms};
 
 pub struct RenderState {
     pipeline: wgpu::RenderPipeline,
-    color_buffer: wgpu::Buffer,
+    colors: Storage,
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group_a: wgpu::BindGroup, // input=buffer_a, output=buffer_b
-    bind_group_b: wgpu::BindGroup, // input=buffer_b, output=buffer_a
+    bind_group: wgpu::BindGroup, 
+    pub uniforms: Uniforms<RenderUniforms>,
+}
+
+#[derive(Clone, Copy, Debug, Default, encase::ShaderType)]
+pub struct RenderUniforms {
+    pub height: u32,
+    pub width: u32,
 }
 
 impl RenderState {
+    fn create_bind_group(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        uniforms: &Uniforms<RenderUniforms>,
+        colors: &Storage,
+        grid: &Storage,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Color Scheme Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                uniforms.bind_group_entry(0),
+                colors.bind_group_entry(1),
+                grid.bind_group_entry(2),
+            ],
+        })
+    }
+
     pub fn new(
         device: &wgpu::Device,
-        buffer_a: &wgpu::Buffer,
-        buffer_b: &wgpu::Buffer,
-        globals: &wgpu::Buffer,
+        grid: &Storage,
+        uniforms: Uniforms<RenderUniforms>,
         config: &wgpu::SurfaceConfiguration,
     ) -> Self {
+        let shader = device.create_shader_module(wgpu::include_wgsl!("render.wgsl"));
+
+        let colors = Storage::new(device, "Color Scheme", &VIRIDIS);
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Render Bind Group Layout"),
             entries: &[
-                // global uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // colors
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // render buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniforms.layout_entry(0, wgpu::ShaderStages::FRAGMENT),
+                colors.layout_entry(1, wgpu::ShaderStages::FRAGMENT, true),
+                grid.layout_entry(2, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             ],
         });
 
-        let color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Color Scheme Buffer"),
-            contents: bytemuck::cast_slice(&VIRIDIS),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
 
-        let bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Render Bind Group A"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: color_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer_a.as_entire_binding(),
-                },
-            ],
-        });
-
-        let bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Render Bind Group B"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: color_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer_b.as_entire_binding(),
-                },
-            ],
-        });
-
-        let shader = device.create_shader_module(wgpu::include_wgsl!("render.wgsl"));
+        let bind_group = Self::create_bind_group(device, &bind_group_layout, &uniforms, &colors, grid);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
@@ -140,62 +94,28 @@ impl RenderState {
 
         Self {
             pipeline,
-            color_buffer,
+            colors,
+            uniforms,
             bind_group_layout,
-            bind_group_a,
-            bind_group_b,
+            bind_group,
         }
     }
 
     pub fn recreate_bind_groups(
         &mut self,
         device: &wgpu::Device,
-        buffer_a: &wgpu::Buffer,
-        buffer_b: &wgpu::Buffer,
-        globals: &wgpu::Buffer,
+        grid: &Storage,
     ) {
-        self.bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Render Bind Group A"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.color_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer_a.as_entire_binding(),
-                },
-            ],
-        });
-
-        self.bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Render Bind Group B"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.color_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer_b.as_entire_binding(),
-                },
-            ],
-        });
+        self.bind_group = Self::create_bind_group(device, &self.bind_group_layout, &self.uniforms, &self.colors, grid);
     }
 
-    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, surface: &wgpu::Surface, flip: bool) {
-        let output = surface.get_current_texture().unwrap();
-        let view = output.texture.create_view(&Default::default());
+    pub fn render_into(
+        &self, 
+        encoder: &mut wgpu::CommandEncoder, 
+        view: &wgpu::TextureView,
+        queue: &wgpu::Queue,
+    ) {
+        self.uniforms.write(queue);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -220,12 +140,7 @@ impl RenderState {
             });
             pass.set_pipeline(&self.pipeline);
 
-            let bind_group = if flip {
-                &self.bind_group_b
-            } else {
-                &self.bind_group_a
-            };
-            pass.set_bind_group(0, bind_group, &[]);
+            pass.set_bind_group(0, &self.bind_group, &[]);
 
             pass.draw(0..4, 0..1);
         }

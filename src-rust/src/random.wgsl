@@ -1,9 +1,6 @@
-struct Globals { 
+struct RandomnessUniforms {
     height: u32,
     width: u32,
-}
-
-struct RandomnessUniforms {
     x: u32,
     y: u32,
     seed: u32,
@@ -12,9 +9,8 @@ struct RandomnessUniforms {
     size: u32,
 }
 
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var<uniform> uniforms: RandomnessUniforms;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<uniform> uniforms: RandomnessUniforms;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
 
 // https://www.reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
 fn wang_hash(seed: u32) -> u32 {
@@ -35,7 +31,7 @@ fn randomize(
     let x = global_id.x;
     let y = global_id.y;
     
-    if (x >= globals.width || y >= globals.height) {
+    if (x >= uniforms.width || y >= uniforms.height) {
         return;
     }
 
@@ -46,7 +42,7 @@ fn randomize(
         return;
     }
 
-    let index = y * globals.width + x;
-    let combined = x + y * globals.width + uniforms.seed * globals.width * globals.height;
+    let index = y * uniforms.width + x;
+    let combined = x + y * uniforms.width + uniforms.seed * uniforms.width * uniforms.height;
     output[index] = (f32(wang_hash(combined)) / 4294967296.0) * uniforms.density;
 }

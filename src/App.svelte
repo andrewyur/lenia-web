@@ -10,6 +10,7 @@
   import init, { App } from "lenia-web";
   import ControlPanel from "./ControlPanel.svelte";
   import { createContext } from 'svelte';
+    import app from "./main";
 
   let canvas: HTMLCanvasElement;
   const context: AppContext = $state({ 
@@ -78,8 +79,12 @@
       times.push(now);
       fps = times.length; 
 
-      context.app?.render_frame(playing);
-      requestAnimationFrame(animate);
+      if(playing) {
+        context.app?.step();
+      }
+
+      context.app?.render_frame();
+      requestAnimationFrame(animate)
     };
     animate();
 
